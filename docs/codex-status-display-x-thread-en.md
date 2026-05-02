@@ -2,6 +2,8 @@
 
 Attach video: `assets/codex-status-display-demo.mp4`
 
+GitHub: https://github.com/Yaobin29/codex-status-display
+
 1/ I built a tiny ESP32 screen that shows my Codex chat status on my desk.
 
 Not tasks. Not a dashboard. Just the two things I actually need while agents are running in the background:
@@ -61,5 +63,7 @@ I do not need to keep checking the Codex window. The screen tells me whether the
 8/ Small displays force good product thinking.
 
 The breakthrough was not adding more data. It was deleting the wrong data until the screen only showed what changes my next action.
+
+Code: https://github.com/Yaobin29/codex-status-display
 
 #Codex #ESP32 #Arduino #AIagents #maker
