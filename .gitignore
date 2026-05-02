@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+
+local-runtime/
+
+firmware/esp32_st7789_serial/wifi_config.h
+
