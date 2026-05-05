@@ -85,6 +85,15 @@ DisplaySnapshot lastSnapshot;
 bool uiInitialized = false;
 bool staleShown = false;
 
+bool hasProjectRow(const DisplaySnapshot &snapshot, const String &name, const String &status) {
+  for (int i = 0; i < snapshot.projectRows; i++) {
+    if (snapshot.projectName[i] == name && snapshot.projectStatus[i] == status) {
+      return true;
+    }
+  }
+  return false;
+}
+
 uint16_t colorForUrgent(int urgent) {
   if (urgent > 0) {
     return ST77XX_RED;
@@ -649,8 +658,13 @@ DisplaySnapshot buildSnapshot(JsonDocument &doc) {
     if (snapshot.projectRows >= LIST_ROWS) {
       break;
     }
-    snapshot.projectName[snapshot.projectRows] = compactProjectName(item, "resp", 8);
-    snapshot.projectStatus[snapshot.projectRows] = "awaiting_response";
+    String name = compactProjectName(item, "resp", 8);
+    String status = "awaiting_response";
+    if (hasProjectRow(snapshot, name, status)) {
+      continue;
+    }
+    snapshot.projectName[snapshot.projectRows] = name;
+    snapshot.projectStatus[snapshot.projectRows] = status;
     snapshot.projectRows++;
   }
   return snapshot;
