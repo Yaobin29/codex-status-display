@@ -256,6 +256,80 @@ class CodexStatusDisplayTests(unittest.TestCase):
         self.assertEqual(snapshot["counts"]["running_projects"], 1)
         self.assertEqual(snapshot["projects"][0]["name"], "Answered Choice")
 
+    def test_implementation_plan_waits_for_response_after_task_complete(self) -> None:
+        self.write_codex_thread(
+            "thread-plan",
+            "Plan Needs Approval",
+            [
+                ("task_started", self.now - dt.timedelta(minutes=8)),
+                (
+                    "response_item:message",
+                    self.now - dt.timedelta(minutes=6),
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "\n".join(
+                                    [
+                                        "# Fix Plan",
+                                        "## Summary",
+                                        "Update the display response logic.",
+                                        "## Key Changes",
+                                        "- Treat implementation plans as waiting.",
+                                        "## Test Plan",
+                                        "- Run unit tests.",
+                                        "## Assumptions",
+                                        "- User will approve before implementation.",
+                                    ]
+                                ),
+                            }
+                        ],
+                    },
+                ),
+                ("task_complete", self.now - dt.timedelta(minutes=5)),
+            ],
+        )
+
+        snapshot = status_display.build_snapshot(self.root, self.now)
+
+        self.assertEqual(snapshot["counts"]["awaiting_response"], 1)
+        self.assertEqual(snapshot["counts"]["running_projects"], 1)
+        self.assertEqual(snapshot["projects"][0]["name"], "Plan Needs Approval")
+        self.assertEqual(snapshot["projects"][0]["status"], "awaiting_response")
+        self.assertEqual(snapshot["awaiting"][0]["title"], "Plan Needs Approval")
+
+    def test_user_reply_clears_implementation_plan_response_wait(self) -> None:
+        self.write_codex_thread(
+            "thread-plan-replied",
+            "Plan Approved",
+            [
+                ("task_started", self.now - dt.timedelta(minutes=8)),
+                (
+                    "response_item:message",
+                    self.now - dt.timedelta(minutes=6),
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "PLEASE IMPLEMENT THIS PLAN:\n\n## Summary\nDo it."}],
+                    },
+                ),
+                ("task_complete", self.now - dt.timedelta(minutes=5)),
+                (
+                    "response_item:message",
+                    self.now - dt.timedelta(minutes=4),
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "please implement this plan"}],
+                    },
+                ),
+            ],
+        )
+
+        snapshot = status_display.build_snapshot(self.root, self.now)
+
+        self.assertEqual(snapshot["counts"]["awaiting_response"], 0)
+        self.assertEqual(snapshot["counts"]["running_projects"], 0)
+
     def test_wire_line_is_ascii_json_and_under_limit(self) -> None:
         self.write(
             "local-runtime/task-list/2026-05/task-list-2026-05.md",

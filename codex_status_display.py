@@ -38,6 +38,14 @@ CODEX_STATE_DB = "state_5.sqlite"
 THREAD_TERMINAL_EVENTS = {"task_complete", "turn_aborted", "error"}
 APPROVAL_EVENT_HINTS = ("approval", "approve", "permission_request")
 AWAITING_RESPONSE_TOOL_NAMES = {"request_user_input"}
+PLAN_AWAITING_MARKERS = (
+    "please implement this plan",
+    "implement this plan",
+    "## summary",
+    "## key changes",
+    "## test plan",
+    "## assumptions",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -156,6 +164,33 @@ def safe_text(value: Any, limit: int = 72) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 1)].rstrip() + "..."
+
+
+def response_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            text = item.get("text") or item.get("input_text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "\n".join(parts)
+
+
+def looks_like_waiting_plan_message(message: Any) -> bool:
+    text = response_content_text(message).strip()
+    if not text:
+        return False
+    lower = text.lower()
+    if "please implement this plan" in lower or "implement this plan" in lower:
+        return True
+    marker_count = sum(1 for marker in PLAN_AWAITING_MARKERS if marker in lower)
+    return marker_count >= 3 and ("plan" in lower or "计划" in text)
 
 
 def current_task_list_path(root: Path, now: dt.datetime) -> Path | None:
@@ -382,6 +417,8 @@ def thread_event_summary(rollout_path: Any) -> dict[str, Any]:
         "pending_approval": False,
         "pending_response": False,
         "pending_response_at": None,
+        "pending_plan_review": False,
+        "pending_plan_review_at": None,
     }
     if not path.exists():
         return summary
@@ -399,7 +436,21 @@ def thread_event_summary(rollout_path: Any) -> dict[str, Any]:
         if record_type == "event_msg":
             event_type = str(payload.get("type") or "")
             turn_id = str(payload.get("turn_id") or payload.get("turnId") or "")
-            if event_type == "task_started":
+            if event_type == "user_message":
+                summary.update(
+                    {
+                        "pending_plan_review": False,
+                        "pending_plan_review_at": None,
+                    }
+                )
+            elif event_type == "agent_message" and looks_like_waiting_plan_message(payload.get("message")):
+                summary.update(
+                    {
+                        "pending_plan_review": True,
+                        "pending_plan_review_at": event_at,
+                    }
+                )
+            elif event_type == "task_started":
                 pending_response_calls.clear()
                 summary.update(
                     {
@@ -407,6 +458,8 @@ def thread_event_summary(rollout_path: Any) -> dict[str, Any]:
                         "last_status_at": event_at,
                         "last_turn_id": turn_id,
                         "pending_approval": False,
+                        "pending_plan_review": False,
+                        "pending_plan_review_at": None,
                     }
                 )
             elif event_type == "task_complete":
@@ -448,6 +501,22 @@ def thread_event_summary(rollout_path: Any) -> dict[str, Any]:
             elif item_type == "function_call_output":
                 call_id = str(payload.get("call_id") or "")
                 pending_response_calls.pop(call_id, None)
+            elif item_type == "message":
+                role = str(payload.get("role") or "")
+                if role == "user":
+                    summary.update(
+                        {
+                            "pending_plan_review": False,
+                            "pending_plan_review_at": None,
+                        }
+                    )
+                elif role == "assistant" and looks_like_waiting_plan_message(payload.get("content")):
+                    summary.update(
+                        {
+                            "pending_plan_review": True,
+                            "pending_plan_review_at": event_at,
+                        }
+                    )
     pending_response_at = max(
         (when for when in pending_response_calls.values() if isinstance(when, dt.datetime)),
         default=None,
@@ -506,8 +575,8 @@ def collect_chat_threads(root: Path, now: dt.datetime) -> dict[str, Any]:
         title = thread_display_name(row)
         status_event = events.get("last_status_event")
         status_at = events.get("last_status_at")
-        if events.get("pending_response"):
-            pending_at = events.get("pending_response_at")
+        if events.get("pending_response") or events.get("pending_plan_review"):
+            pending_at = events.get("pending_response_at") or events.get("pending_plan_review_at")
             waiting_item = {
                 "title": title,
                 "status": "awaiting_response",
