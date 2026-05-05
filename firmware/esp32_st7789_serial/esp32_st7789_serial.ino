@@ -21,7 +21,7 @@
 #define TFT_HEIGHT 240
 #define SERIAL_BAUD 115200
 #define MAX_LINE_BYTES 1400
-#define WIFI_POLL_MS 10000
+#define WIFI_POLL_MS 5000
 #define WIFI_RETRY_MS 12000
 
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
@@ -237,11 +237,11 @@ void drawRunProgress(int x, int y, int w, int h, int runningProjects, int awaiti
   }
 }
 
-void drawTopStats(int runningProjects, int doneUnseen, int awaitingResponse) {
+void drawTopStats(int runningProjects, int doneToday, int awaitingResponse) {
   lastRunningProjects = runningProjects;
   lastAwaitingResponse = awaitingResponse;
   uint16_t runColor = runningColor(runningProjects, awaitingResponse, false);
-  uint16_t doneColor = doneUnseen > 0 ? ST77XX_CYAN : tft.color565(78, 78, 78);
+  uint16_t doneColor = doneToday > 0 ? ST77XX_CYAN : tft.color565(78, 78, 78);
 
   tft.drawRoundRect(4, 34, 75, 78, 10, runColor);
   tft.drawRoundRect(86, 34, 45, 78, 8, doneColor);
@@ -256,7 +256,7 @@ void drawTopStats(int runningProjects, int doneUnseen, int awaitingResponse) {
   tft.setCursor(runText.length() > 1 ? 15 : 21, runText.length() > 1 ? 68 : 63);
   tft.print(runText);
 
-  if (doneUnseen > 0) {
+  if (doneToday > 0) {
     tft.fillCircle(94, 43, 3, doneColor);
   }
   tft.setTextColor(doneColor);
@@ -264,7 +264,7 @@ void drawTopStats(int runningProjects, int doneUnseen, int awaitingResponse) {
   tft.setCursor(101, 43);
   tft.print("Done");
   tft.setTextColor(doneColor);
-  String doneText = countText(doneUnseen);
+  String doneText = countText(doneToday);
   if (doneText.length() > 2) {
     tft.setTextSize(2);
     tft.setCursor(91, 76);
@@ -355,7 +355,10 @@ void drawStatus(JsonDocument &doc) {
   JsonObject counts = doc["counts"];
   int awaitingResponse = counts["awaiting_response"] | 0;
   int runningProjects = counts["running_projects"] | 0;
-  int doneUnseen = counts["done_unseen"] | 0;
+  int doneToday = counts["completed_today"] | 0;
+  if (doneToday == 0 && counts.containsKey("done_unseen")) {
+    doneToday = counts["done_unseen"] | 0;
+  }
 
   tft.fillScreen(ST77XX_BLACK);
 
@@ -371,12 +374,12 @@ void drawStatus(JsonDocument &doc) {
 
   if (awaitingResponse > 0) {
     animMode = 2;
-  } else if (doneUnseen > 0) {
+  } else if (doneToday > 0) {
     animMode = 1;
   } else {
     animMode = 0;
   }
-  drawTopStats(runningProjects, doneUnseen, awaitingResponse);
+  drawTopStats(runningProjects, doneToday, awaitingResponse);
   drawRunningList(doc, runningProjects);
 }
 

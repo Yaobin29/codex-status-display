@@ -31,8 +31,9 @@ SECTION_RE = re.compile(r"^##+\s+(?P<title>.+?)\s*$")
 DONE_APPROVAL_STATUSES = {"done", "resolved", "closed", "approved", "rejected", "dismissed"}
 COMPLETED_STATUSES = {"success"}
 COMPLETED_LOOKBACK_HOURS = 24
-CHAT_DONE_LOOKBACK_HOURS = 24
 CHAT_RUNNING_STALE_MINUTES = 120
+THREAD_SCAN_LIMIT = 500
+MAX_ROLLOUT_TAIL_BYTES = 1_000_000
 CODEX_STATE_DB = "state_5.sqlite"
 THREAD_TERMINAL_EVENTS = {"task_complete", "turn_aborted", "error"}
 APPROVAL_EVENT_HINTS = ("approval", "approve", "permission_request")
@@ -41,19 +42,19 @@ AWAITING_RESPONSE_TOOL_NAMES = {"request_user_input"}
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build a compact local Codex chat status snapshot for an ESP32 status display.",
+        description="Build a compact Codex/Pandora status snapshot for a USB display board.",
     )
     parser.add_argument("--root", help="Avatar Node repo root. Defaults to auto-detect from cwd.")
     parser.add_argument("--now", help="ISO timestamp override, mainly for tests.")
     parser.add_argument("--serial", help=f"Serial device to write to, for example {DEFAULT_SERIAL}.")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate. Default: 115200.")
     parser.add_argument("--watch", action="store_true", help="Keep refreshing instead of running once.")
-    parser.add_argument("--interval", type=float, default=10.0, help="Refresh interval in seconds for --watch.")
+    parser.add_argument("--interval", type=float, default=5.0, help="Refresh interval in seconds for --watch.")
     parser.add_argument("--dry-run", action="store_true", help="Print the wire payload but do not write serial.")
     parser.add_argument("--quiet", action="store_true", help="Do not print the wire payload to stdout.")
     parser.add_argument("--max-wire-bytes", type=int, default=DEFAULT_MAX_WIRE_BYTES)
     parser.add_argument("--project-name", action="append", default=[], help="Extra whitelisted project name to scan for.")
-    parser.add_argument("--mark-seen", action="store_true", help="Mark current completed automation runs as viewed and exit.")
+    parser.add_argument("--mark-seen", action="store_true", help="Legacy: mark current completed chat runs as viewed and exit.")
     parser.add_argument("--http", action="store_true", help="Serve the wire payload over HTTP for WiFi display mode.")
     parser.add_argument("--http-host", default="0.0.0.0", help="HTTP bind host for --http. Default: 0.0.0.0.")
     parser.add_argument("--http-port", type=int, default=8787, help="HTTP port for --http. Default: 8787.")
@@ -75,8 +76,6 @@ def candidate_roots(explicit_root: str | None) -> list[Path]:
 
 
 def resolve_project_root(explicit_root: str | None = None) -> Path:
-    if explicit_root:
-        return Path(explicit_root).expanduser().resolve()
     seen: set[Path] = set()
     for candidate in candidate_roots(explicit_root):
         resolved = candidate.resolve()
@@ -85,13 +84,7 @@ def resolve_project_root(explicit_root: str | None = None) -> Path:
         seen.add(resolved)
         if (resolved / "AGENTS.md").exists() and (resolved / "local-runtime").exists():
             return resolved
-        if (resolved / "local-runtime").exists():
-            return resolved
-        if (resolved / "codex_status_display.py").exists() and (resolved / "firmware").exists():
-            return resolved
-        if (resolved / "services" / "codex-status-display" / "codex_status_display.py").exists():
-            return resolved
-    return Path.cwd().resolve()
+    raise SystemExit("Could not locate the Avatar Node root. Pass --root explicitly.")
 
 
 def parse_now(raw: str | None) -> dt.datetime:
@@ -359,7 +352,7 @@ def thread_display_name(row: dict[str, Any]) -> str:
     return title
 
 
-def thread_rows_from_codex(limit: int = 120) -> list[dict[str, Any]]:
+def thread_rows_from_codex(limit: int = THREAD_SCAN_LIMIT) -> list[dict[str, Any]]:
     db_path = codex_home() / CODEX_STATE_DB
     if not db_path.exists():
         return []
@@ -392,13 +385,8 @@ def thread_event_summary(rollout_path: Any) -> dict[str, Any]:
     }
     if not path.exists():
         return summary
-    try:
-        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
-    except OSError:
-        return summary
-
     pending_response_calls: dict[str, dt.datetime | None] = {}
-    for line in lines:
+    for line in recent_jsonl_lines(path):
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
@@ -473,19 +461,40 @@ def normalize_now_for_compare(now: dt.datetime) -> dt.datetime:
     return now if now.tzinfo else now.replace(tzinfo=dt.timezone.utc)
 
 
+def is_same_local_day(value: dt.datetime, now: dt.datetime) -> bool:
+    comparable_now = normalize_now_for_compare(now)
+    comparable_value = value
+    if comparable_value.tzinfo is None:
+        comparable_value = comparable_value.replace(tzinfo=comparable_now.tzinfo or dt.timezone.utc)
+    else:
+        comparable_value = comparable_value.astimezone(comparable_now.tzinfo or dt.timezone.utc)
+    return comparable_value.date() == comparable_now.date()
+
+
 def chat_completion_key(thread_id: str, completed_at: dt.datetime | None) -> str:
     return f"{thread_id}|{completed_at.isoformat() if completed_at else ''}"
 
 
+def recent_jsonl_lines(path: Path, max_bytes: int = MAX_ROLLOUT_TAIL_BYTES) -> list[str]:
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as handle:
+            if size > max_bytes:
+                handle.seek(size - max_bytes)
+                handle.readline()
+            data = handle.read()
+    except OSError:
+        return []
+    return data.decode("utf-8", errors="ignore").splitlines()
+
+
 def collect_chat_threads(root: Path, now: dt.datetime) -> dict[str, Any]:
-    paths = ensure_state(root)
-    seen_chat = load_seen_keys(paths["seen_chat_completions"])
+    ensure_state(root)
     comparable_now = normalize_now_for_compare(now)
     running_cutoff = comparable_now - dt.timedelta(minutes=CHAT_RUNNING_STALE_MINUTES)
-    done_cutoff = comparable_now - dt.timedelta(hours=CHAT_DONE_LOOKBACK_HOURS)
 
     running: list[dict[str, str]] = []
-    completed_unseen: list[dict[str, str]] = []
+    completed_today: list[dict[str, str]] = []
     awaiting_response: list[dict[str, str]] = []
     active_projects: list[dict[str, str]] = []
 
@@ -516,23 +525,23 @@ def collect_chat_threads(root: Path, now: dt.datetime) -> dict[str, Any]:
             active_projects.append(running_item)
             continue
         completed_at = events.get("last_completion_at")
-        if isinstance(completed_at, dt.datetime) and completed_at >= done_cutoff:
+        if isinstance(completed_at, dt.datetime) and is_same_local_day(completed_at, now):
             key = chat_completion_key(thread_id, completed_at)
-            if key not in seen_chat:
-                completed_unseen.append(
-                    {
-                        "title": title,
-                        "status": "done",
-                        "completed_at": completed_at.isoformat(),
-                        "key": key,
-                        "id": thread_id,
-                    }
-                )
+            completed_today.append(
+                {
+                    "title": title,
+                    "status": "done",
+                    "completed_at": completed_at.isoformat(),
+                    "key": key,
+                    "id": thread_id,
+                }
+            )
 
     return {
         "running": running[:8],
         "active_projects": active_projects[:8],
-        "completed_unseen": completed_unseen[:12],
+        "completed_today": completed_today[:24],
+        "completed_unseen": completed_today[:24],
         "awaiting_response": awaiting_response[:8],
         "source": str(codex_home() / CODEX_STATE_DB),
     }
@@ -542,12 +551,12 @@ def mark_chat_completed_seen(root: Path, now: dt.datetime) -> int:
     paths = ensure_state(root)
     existing = load_seen_keys(paths["seen_chat_completions"])
     chat = collect_chat_threads(root, now)
-    for item in chat["completed_unseen"]:
+    for item in chat["completed_today"]:
         key = str(item.get("key") or "")
         if key:
             existing.add(key)
     write_json(paths["seen_chat_completions"], {"seen": sorted(existing)})
-    return len(chat["completed_unseen"])
+    return len(chat["completed_today"])
 
 
 def collect_promote_reviews(root: Path) -> dict[str, Any]:
@@ -647,13 +656,14 @@ def build_snapshot(root: Path, now: dt.datetime, extra_project_names: list[str] 
         alerts.append(safe_text(f"Response needed: {item['title']}", 74))
     for item in chat["running"][:2]:
         alerts.append(safe_text(f"Running: {item['name']}", 74))
-    for item in chat["completed_unseen"][:2]:
-        alerts.append(safe_text(f"Done to read: {item['title']}", 74))
+    for item in chat["completed_today"][:2]:
+        alerts.append(safe_text(f"Done: {item['title']}", 74))
 
     counts = {
         "awaiting_response": len(chat["awaiting_response"]),
         "running_projects": len(chat["active_projects"]),
-        "done_unseen": len(chat["completed_unseen"]),
+        "completed_today": len(chat["completed_today"]),
+        "done_unseen": len(chat["completed_today"]),
     }
     return {
         "schema_version": WIRE_SCHEMA_VERSION,
@@ -662,10 +672,11 @@ def build_snapshot(root: Path, now: dt.datetime, extra_project_names: list[str] 
         "alerts": alerts[:6],
         "projects": chat["active_projects"][:6],
         "awaiting": chat["awaiting_response"][:6],
-        "completed": chat["completed_unseen"][:6],
+        "completed": chat["completed_today"][:6],
         "sources": {
             "codex_threads": chat["source"],
             "seen_chat_completions": str(state_paths(root)["seen_chat_completions"]),
+            "completed_day": normalize_now_for_compare(now).date().isoformat(),
         },
     }
 

@@ -149,7 +149,10 @@ class CodexStatusDisplayTests(unittest.TestCase):
 
         snapshot = status_display.build_snapshot(self.root, self.now)
 
-        self.assertEqual(snapshot["counts"], {"awaiting_response": 0, "done_unseen": 0, "running_projects": 0})
+        self.assertEqual(
+            snapshot["counts"],
+            {"awaiting_response": 0, "completed_today": 0, "done_unseen": 0, "running_projects": 0},
+        )
         self.assertNotIn("open_tasks", snapshot["counts"])
         self.assertNotIn("automation_blockers", snapshot["counts"])
         self.assertFalse(any("Blocked:" in item for item in snapshot["alerts"]))
@@ -165,21 +168,36 @@ class CodexStatusDisplayTests(unittest.TestCase):
         self.assertEqual(snapshot["counts"]["awaiting_response"], 0)
         self.assertEqual(snapshot["awaiting"], [])
 
-    def test_recent_completed_chats_are_unseen_until_marked_seen(self) -> None:
+    def test_today_completed_chats_count_until_local_midnight(self) -> None:
         self.write_codex_thread(
             "thread-done",
             "Finished Demo",
             [("task_started", self.now - dt.timedelta(minutes=4)), ("task_complete", self.now - dt.timedelta(minutes=3))],
         )
+        self.write_codex_thread(
+            "thread-yesterday",
+            "Yesterday Demo",
+            [
+                ("task_started", self.now - dt.timedelta(days=1, minutes=4)),
+                ("task_complete", self.now - dt.timedelta(days=1, minutes=3)),
+            ],
+        )
 
         snapshot = status_display.build_snapshot(self.root, self.now)
 
+        self.assertEqual(snapshot["counts"]["completed_today"], 1)
         self.assertEqual(snapshot["counts"]["done_unseen"], 1)
         self.assertEqual(snapshot["completed"][0]["title"], "Finished Demo")
 
         marked = status_display.mark_chat_completed_seen(self.root, self.now)
         self.assertEqual(marked, 1)
         snapshot = status_display.build_snapshot(self.root, self.now)
+        self.assertEqual(snapshot["counts"]["completed_today"], 1)
+        self.assertEqual(snapshot["counts"]["done_unseen"], 1)
+
+        tomorrow = self.now + dt.timedelta(days=1)
+        snapshot = status_display.build_snapshot(self.root, tomorrow)
+        self.assertEqual(snapshot["counts"]["completed_today"], 0)
         self.assertEqual(snapshot["counts"]["done_unseen"], 0)
 
     def test_running_chat_is_counted_from_last_task_started(self) -> None:
@@ -251,7 +269,10 @@ class CodexStatusDisplayTests(unittest.TestCase):
         self.assertLessEqual(len(encoded), 1024)
         parsed = json.loads(line)
         self.assertEqual(parsed["v"], 1)
-        self.assertEqual(parsed["counts"], {"awaiting_response": 0, "done_unseen": 0, "running_projects": 0})
+        self.assertEqual(
+            parsed["counts"],
+            {"awaiting_response": 0, "completed_today": 0, "done_unseen": 0, "running_projects": 0},
+        )
         self.assertIn("awaiting", parsed)
         self.assertNotIn("approvals", parsed)
 

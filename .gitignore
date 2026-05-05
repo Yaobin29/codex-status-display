@@ -4,5 +4,4 @@ __pycache__/
 
 local-runtime/
 
-firmware/esp32_st7789_serial/wifi_config.h
-
+firmware/**/wifi_config.h
