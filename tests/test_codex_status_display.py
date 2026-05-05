@@ -208,6 +208,18 @@ class CodexStatusDisplayTests(unittest.TestCase):
         self.assertEqual(snapshot["counts"]["running_projects"], 1)
         self.assertEqual(snapshot["projects"][0]["name"], "Active Chat")
 
+    def test_thread_title_beats_agent_nickname_when_title_is_meaningful(self) -> None:
+        self.write_codex_thread(
+            "thread-named",
+            "Feishu Sync Review",
+            [("task_started", self.now - dt.timedelta(minutes=5))],
+            nickname="Hypatia",
+        )
+
+        snapshot = status_display.build_snapshot(self.root, self.now)
+
+        self.assertEqual(snapshot["projects"][0]["name"], "Feishu Sync Review")
+
     def test_pending_user_input_counts_as_awaiting_response(self) -> None:
         self.write_codex_thread(
             "thread-await",
@@ -363,6 +375,26 @@ class CodexStatusDisplayTests(unittest.TestCase):
         self.assertEqual(snapshot["counts"]["running_projects"], 1)
         self.assertEqual(snapshot["projects"][0]["name"], "Plan Running")
         self.assertEqual(snapshot["projects"][0]["status"], "running")
+
+    def test_old_awaiting_response_is_hidden_after_three_days(self) -> None:
+        self.write_codex_thread(
+            "thread-stale-await",
+            "Old Awaiting",
+            [
+                ("task_started", self.now - dt.timedelta(days=4, minutes=10)),
+                (
+                    "response_item:function_call",
+                    self.now - dt.timedelta(days=4, minutes=8),
+                    {"name": "request_user_input", "call_id": "ask-old"},
+                ),
+            ],
+        )
+
+        snapshot = status_display.build_snapshot(self.root, self.now)
+
+        self.assertEqual(snapshot["counts"]["awaiting_response"], 0)
+        self.assertEqual(snapshot["awaiting"], [])
+        self.assertEqual(snapshot["projects"], [])
 
     def test_wire_line_is_ascii_json_and_under_limit(self) -> None:
         self.write(

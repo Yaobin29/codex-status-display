@@ -32,6 +32,7 @@ DONE_APPROVAL_STATUSES = {"done", "resolved", "closed", "approved", "rejected", 
 COMPLETED_STATUSES = {"success"}
 COMPLETED_LOOKBACK_HOURS = 24
 CHAT_RUNNING_STALE_MINUTES = 120
+AWAITING_RESPONSE_STALE_DAYS = 3
 THREAD_SCAN_LIMIT = 500
 MAX_ROLLOUT_TAIL_BYTES = 1_000_000
 CODEX_STATE_DB = "state_5.sqlite"
@@ -382,6 +383,9 @@ def mark_completed_seen(root: Path, automations: dict[str, Any], now: dt.datetim
 def thread_display_name(row: dict[str, Any]) -> str:
     nickname = safe_text(row.get("agent_nickname"), 24)
     title = safe_text(row.get("title") or row.get("id") or "chat", 44)
+    generic_titles = {"chat", "thread", str(row.get("id") or "")}
+    if title and title not in generic_titles:
+        return title
     if nickname:
         return nickname
     return title
@@ -578,6 +582,7 @@ def collect_chat_threads(root: Path, now: dt.datetime) -> dict[str, Any]:
     ensure_state(root)
     comparable_now = normalize_now_for_compare(now)
     running_cutoff = comparable_now - dt.timedelta(minutes=CHAT_RUNNING_STALE_MINUTES)
+    awaiting_cutoff = comparable_now - dt.timedelta(days=AWAITING_RESPONSE_STALE_DAYS)
 
     running: list[dict[str, str]] = []
     completed_today: list[dict[str, str]] = []
@@ -594,6 +599,8 @@ def collect_chat_threads(root: Path, now: dt.datetime) -> dict[str, Any]:
         status_at = events.get("last_status_at")
         if events.get("pending_response") or events.get("pending_plan_review"):
             pending_at = events.get("pending_response_at") or events.get("pending_plan_review_at")
+            if isinstance(pending_at, dt.datetime) and pending_at < awaiting_cutoff:
+                continue
             waiting_item = {
                 "title": title,
                 "status": "awaiting_response",
