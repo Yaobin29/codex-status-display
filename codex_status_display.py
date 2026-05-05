@@ -419,6 +419,8 @@ def thread_event_summary(rollout_path: Any) -> dict[str, Any]:
         "pending_response_at": None,
         "pending_plan_review": False,
         "pending_plan_review_at": None,
+        "last_user_at": None,
+        "last_task_started_at": None,
     }
     if not path.exists():
         return summary
@@ -439,6 +441,7 @@ def thread_event_summary(rollout_path: Any) -> dict[str, Any]:
             if event_type == "user_message":
                 summary.update(
                     {
+                        "last_user_at": event_at,
                         "pending_plan_review": False,
                         "pending_plan_review_at": None,
                     }
@@ -457,6 +460,7 @@ def thread_event_summary(rollout_path: Any) -> dict[str, Any]:
                         "last_status_event": "task_started",
                         "last_status_at": event_at,
                         "last_turn_id": turn_id,
+                        "last_task_started_at": event_at,
                         "pending_approval": False,
                         "pending_plan_review": False,
                         "pending_plan_review_at": None,
@@ -506,6 +510,7 @@ def thread_event_summary(rollout_path: Any) -> dict[str, Any]:
                 if role == "user":
                     summary.update(
                         {
+                            "last_user_at": event_at,
                             "pending_plan_review": False,
                             "pending_plan_review_at": None,
                         }
@@ -523,6 +528,18 @@ def thread_event_summary(rollout_path: Any) -> dict[str, Any]:
     )
     summary["pending_response"] = bool(pending_response_calls)
     summary["pending_response_at"] = pending_response_at
+    plan_at = summary.get("pending_plan_review_at")
+    if summary.get("pending_plan_review") and isinstance(plan_at, dt.datetime):
+        later_user = summary.get("last_user_at")
+        later_start = summary.get("last_task_started_at")
+        if (
+            isinstance(later_user, dt.datetime)
+            and later_user > plan_at
+            or isinstance(later_start, dt.datetime)
+            and later_start > plan_at
+        ):
+            summary["pending_plan_review"] = False
+            summary["pending_plan_review_at"] = None
     return summary
 
 

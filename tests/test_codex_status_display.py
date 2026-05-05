@@ -330,6 +330,40 @@ class CodexStatusDisplayTests(unittest.TestCase):
         self.assertEqual(snapshot["counts"]["awaiting_response"], 0)
         self.assertEqual(snapshot["counts"]["running_projects"], 0)
 
+    def test_started_work_after_plan_response_is_running_not_awaiting(self) -> None:
+        self.write_codex_thread(
+            "thread-plan-running",
+            "Plan Running",
+            [
+                ("task_started", self.now - dt.timedelta(minutes=10)),
+                (
+                    "response_item:message",
+                    self.now - dt.timedelta(minutes=8),
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "PLEASE IMPLEMENT THIS PLAN:\n\n## Summary\nDo it."}],
+                    },
+                ),
+                ("task_complete", self.now - dt.timedelta(minutes=7)),
+                (
+                    "response_item:message",
+                    self.now - dt.timedelta(minutes=6),
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "please implement this plan"}],
+                    },
+                ),
+                ("task_started", self.now - dt.timedelta(minutes=5)),
+            ],
+        )
+
+        snapshot = status_display.build_snapshot(self.root, self.now)
+
+        self.assertEqual(snapshot["counts"]["awaiting_response"], 0)
+        self.assertEqual(snapshot["counts"]["running_projects"], 1)
+        self.assertEqual(snapshot["projects"][0]["name"], "Plan Running")
+        self.assertEqual(snapshot["projects"][0]["status"], "running")
+
     def test_wire_line_is_ascii_json_and_under_limit(self) -> None:
         self.write(
             "local-runtime/task-list/2026-05/task-list-2026-05.md",
