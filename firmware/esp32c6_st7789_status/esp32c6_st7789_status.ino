@@ -77,6 +77,7 @@ struct DisplaySnapshot {
   uint8_t mode = 255;
   bool wifi = false;
   String minute;
+  String projectId[LIST_ROWS];
   String projectName[LIST_ROWS];
   String projectStatus[LIST_ROWS];
 };
@@ -85,9 +86,9 @@ DisplaySnapshot lastSnapshot;
 bool uiInitialized = false;
 bool staleShown = false;
 
-bool hasProjectRow(const DisplaySnapshot &snapshot, const String &name, const String &status) {
+bool hasProjectRow(const DisplaySnapshot &snapshot, const String &projectId, const String &status) {
   for (int i = 0; i < snapshot.projectRows; i++) {
-    if (snapshot.projectName[i] == name && snapshot.projectStatus[i] == status) {
+    if (snapshot.projectId[i] == projectId && snapshot.projectStatus[i] == status) {
       return true;
     }
   }
@@ -648,6 +649,7 @@ DisplaySnapshot buildSnapshot(JsonDocument &doc) {
     if (snapshot.projectRows >= LIST_ROWS) {
       break;
     }
+    snapshot.projectId[snapshot.projectRows] = asciiDisplayText(item["id"] | "", "", 48);
     snapshot.projectName[snapshot.projectRows] = compactProjectName(item, "chat", 10);
     snapshot.projectStatus[snapshot.projectRows] = asciiDisplayText(item["status"] | "running", "running", 24);
     snapshot.projectRows++;
@@ -658,11 +660,13 @@ DisplaySnapshot buildSnapshot(JsonDocument &doc) {
     if (snapshot.projectRows >= LIST_ROWS) {
       break;
     }
+    String projectId = asciiDisplayText(item["id"] | "", "", 48);
     String name = compactProjectName(item, "resp", 8);
     String status = "awaiting_response";
-    if (hasProjectRow(snapshot, name, status)) {
+    if (projectId.length() > 0 && hasProjectRow(snapshot, projectId, status)) {
       continue;
     }
+    snapshot.projectId[snapshot.projectRows] = projectId;
     snapshot.projectName[snapshot.projectRows] = name;
     snapshot.projectStatus[snapshot.projectRows] = status;
     snapshot.projectRows++;
